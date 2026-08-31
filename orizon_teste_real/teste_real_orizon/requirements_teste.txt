@@ -1,0 +1,6 @@
+numpy
+opencv-python
+cvzone
+mediapipe
+ultralytics
+requests

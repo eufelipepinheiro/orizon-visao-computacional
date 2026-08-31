@@ -1,0 +1,45 @@
+# Ambientes virtuais
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Variáveis secretas
+.env
+.env.*
+!.env.example
+
+# Logs e arquivos temporários
+*.log
+*.tmp
+temp/
+tmp/
+
+# Resultados gerados
+runs/
+outputs/
+output/
+captures/
+screenshots/
+
+# Dados pessoais ou locais
+faces/
+face_data/
+*.db
+*.sqlite
+*.sqlite3

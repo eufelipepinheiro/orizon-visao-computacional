@@ -1,0 +1,38 @@
+TESTE REAL ORIZON — CÂMERA + YOLO + BACKEND
+
+Este pacote está configurado temporariamente com:
+- backend: túnel ngrok informado por Jhonatan
+- id_zona: 1
+- id_funcionario: 1
+- severidade de bloqueio: ALTA
+- câmera: índice 0
+- zona: polígono local de 640x480
+- EPI obrigatório: epi_capacete
+
+1. Extraia o ZIP inteiro.
+2. Abra o PowerShell dentro da pasta extraída.
+3. Instale as dependências:
+
+   python -m pip install -r requirements_teste.txt
+
+   Se "python" não funcionar, use:
+
+   py -m pip install -r requirements_teste.txt
+
+4. Execute com dois cliques em EXECUTAR_TESTE_REAL.bat ou pelo PowerShell:
+
+   python yolo11objectdetection-track.py camera_1.json
+
+5. Fique visível na câmera e faça movimentos leves por alguns segundos enquanto
+   o liveness mostra "Calibrando". Sem capacete, a zona deve mudar para
+   BLOQUEADA e criar uma ocorrência + um alerta ALTA no backend.
+
+6. Pressione Q para encerrar.
+
+IMPORTANTE
+- O endereço ngrok só funciona enquanto Jhonatan mantiver o túnel aberto.
+- O funcionário 1 é temporário e serve apenas para este teste autorizado.
+- Os polígonos locais são usados porque os pontos atualmente cadastrados no
+  backend ainda são provisórios.
+- O reconhecimento facial foi desativado neste teste. Ele será integrado depois
+  que o backend possuir o cadastro/foto correto do funcionário.
