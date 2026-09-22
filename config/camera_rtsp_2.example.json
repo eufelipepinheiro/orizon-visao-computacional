@@ -1,0 +1,31 @@
+{
+  "camera_id": "fresa_2",
+  "comodo": "Fresa 2",
+  "camera_source_env": "CAMERA_FRESA_2_RTSP",
+  "backend_url_env": "ORIZON_BACKEND_URL",
+  "carregar_zonas_backend": true,
+  "incluir_camera_payload": false,
+  "reconnect_seconds": 2,
+  "reconnect_attempts": 0,
+  "zonas": {
+    "MAQUINA_2": {
+      "id_zona": 2,
+      "epis_obrigatorios": [
+        "epi_capacete",
+        "epi_oculos"
+      ],
+      "polygon_fallback": [
+        [0, 0],
+        [0, 720],
+        [1280, 720],
+        [1280, 0]
+      ]
+    }
+  },
+  "resolucao_referencia": {
+    "largura": 1280,
+    "altura": 720
+  },
+  "funcionario_padrao_id": 1,
+  "esp32_habilitado": false
+}

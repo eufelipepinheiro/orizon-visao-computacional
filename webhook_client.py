@@ -1,121 +1,124 @@
-"""Cliente HTTP para enviar ocorrências e alertas ao backend Orizon.
+"""Envio assíncrono de ocorrências e alertas ao backend Orizon."""
 
-Contrato confirmado no backend Spring:
-- POST /api/ocorrencia cria a ocorrência.
-- POST /api/alerta cria o alerta ligado ao id_ocorrencia retornado.
-- Toda ocorrência precisa de id_zona e, no serviço atual, de id_funcionario.
-"""
+from __future__ import annotations
 
 import threading
 import time
+from typing import Any
 
 import requests
 
 
-# TESTE: as requisições aparecem ao vivo na página do Webhook.site.
-# PRODUÇÃO: substitua somente esta URL pelo domínio atual do ngrok,
-# sem acrescentar /api/ocorrencia ou /api/alerta no final.
-BASE_URL = "https://webhook.site/719f4ecf-564f-44b5-bf90-441e86611495"
-#BASE_URL = "https://unideographical-nonnocturnally-jarred.ngrok-free.dev"
-MODO_TESTE_WEBHOOK = "webhook.site" in BASE_URL
-
-# Preenchidos pelo script principal a partir do config da câmera.
-ZONA_ID_MAP = {}
-DEFAULT_FUNCIONARIO_ID = None
+BASE_URL = "https://unideographical-nonnocturnally-jarred.ngrok-free.dev"
+ZONA_ID_MAP: dict[str, int | None] = {}
+DEFAULT_FUNCIONARIO_ID: int | None = None
+CAMERA_ID: str | None = None
+INCLUIR_CAMERA_PAYLOAD = False
 
 REQUEST_TIMEOUT = 6
 VERBOSE = True
-ALERTA_STATUS = "critico"
-HEADERS = {
-    "Accept": "application/json",
-    "Content-Type": "application/json",
-    "ngrok-skip-browser-warning": "true",
-}
 
 
-def _post(path, payload):
-    """Executa um POST e devolve o JSON, ou None quando falhar."""
+def configure(
+    *,
+    base_url: str | None = None,
+    camera_id: str | None = None,
+    funcionario_padrao_id: int | None = None,
+    incluir_camera_payload: bool = False,
+) -> None:
+    """Aplica a configuração específica da instância da câmera."""
+    global BASE_URL, CAMERA_ID, DEFAULT_FUNCIONARIO_ID, INCLUIR_CAMERA_PAYLOAD
+
+    if base_url:
+        BASE_URL = base_url.rstrip("/")
+    CAMERA_ID = camera_id
+    DEFAULT_FUNCIONARIO_ID = funcionario_padrao_id
+    INCLUIR_CAMERA_PAYLOAD = incluir_camera_payload
+
+
+def _headers() -> dict[str, str]:
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "ngrok-skip-browser-warning": "true",
+    }
+    if CAMERA_ID:
+        headers["X-Camera-Id"] = CAMERA_ID
+    return headers
+
+
+def _post(path: str, payload: dict[str, Any]):
     url = f"{BASE_URL.rstrip('/')}{path}"
-
     try:
-        resp = requests.post(
+        response = requests.post(
             url,
             json=payload,
-            headers=HEADERS,
+            headers=_headers(),
             timeout=REQUEST_TIMEOUT,
         )
-
         if VERBOSE:
-            print(f"[webhook] POST {path} -> status {resp.status_code}")
-
-        resp.raise_for_status()
-
-        if not resp.content:
-            return None
-
-        try:
-            return resp.json()
-        except ValueError:
+            print(f"[webhook] POST {path} -> status {response.status_code}")
+        if not response.ok:
             if VERBOSE:
-                print(f"[webhook] resposta não é JSON: {resp.text[:300]}")
+                print(f"[webhook] resposta de erro: {response.text[:500]}")
             return None
-
-    except requests.exceptions.RequestException as erro:
+        if not response.content:
+            return None
+        try:
+            return response.json()
+        except ValueError:
+            return None
+    except requests.exceptions.RequestException as error:
         if VERBOSE:
-            detalhe = ""
-            resposta = getattr(erro, "response", None)
-            if resposta is not None:
-                detalhe = f" | resposta: {resposta.text[:500]}"
-            print(f"[webhook] ERRO em POST {path}: {erro}{detalhe}")
+            print(f"[webhook] ERRO em POST {path}: {error}")
         return None
 
 
-def _funcionario_id(funcionario):
-    """Usa o reconhecido; se não houver ID, usa o funcionário padrão."""
+def _funcionario_id(funcionario: dict[str, Any] | None) -> int | None:
     if funcionario and funcionario.get("id_funcionario"):
-        return funcionario["id_funcionario"]
+        return int(funcionario["id_funcionario"])
     return DEFAULT_FUNCIONARIO_ID
 
 
-def _notify_zone_status(zona_nome, status, epis_faltando, pose_info, funcionario):
+def _notify_zone_status(
+    zona_nome: str,
+    status: str,
+    epis_faltando: list[str],
+    pose_info: dict[str, Any],
+    funcionario: dict[str, Any] | None,
+) -> None:
     id_zona = ZONA_ID_MAP.get(zona_nome)
-
     if id_zona is None:
         if VERBOSE:
-            print(
-                f"[webhook] AVISO: '{zona_nome}' sem id_zona; "
-                "ocorrência não enviada"
-            )
+            print(f"[webhook] AVISO: '{zona_nome}' sem id_zona; envio ignorado")
         return
 
     id_funcionario = _funcionario_id(funcionario)
     if id_funcionario is None:
         if VERBOSE:
-            print(
-                "[webhook] AVISO: nenhum id_funcionario disponível; "
-                "configure funcionario_padrao_id no JSON da câmera"
-            )
+            print("[webhook] AVISO: nenhum id_funcionario disponível; envio ignorado")
         return
 
     data_hora = time.strftime("%Y-%m-%dT%H:%M:%S")
-
-    ocorrencia_payload = {
+    ocorrencia_payload: dict[str, Any] = {
         "data_hora": data_hora,
         "status": status,
         "zona": {"id_zona": id_zona},
         "funcionario": {"id_funcionario": id_funcionario},
     }
+    if CAMERA_ID and INCLUIR_CAMERA_PAYLOAD:
+        ocorrencia_payload["camera_id"] = CAMERA_ID
 
     resultado = _post("/api/ocorrencia", ocorrencia_payload)
-    id_ocorrencia = resultado.get("id_ocorrencia") if isinstance(resultado, dict) else None
 
     if status != "BLOQUEADA":
         return
 
-    # O Webhook.site normalmente não devolve o ID criado por um backend.
-    # No teste usamos um ID fictício apenas para conseguir visualizar também
-    # o POST /api/alerta. Em produção, vale somente o ID real da ocorrência.
-    if not id_ocorrencia and MODO_TESTE_WEBHOOK:
+    id_ocorrencia = (
+        resultado.get("id_ocorrencia") if isinstance(resultado, dict) else None
+    )
+    modo_webhook_site = "webhook.site" in BASE_URL
+    if not id_ocorrencia and modo_webhook_site:
         id_ocorrencia = 999
 
     if not id_ocorrencia:
@@ -123,7 +126,7 @@ def _notify_zone_status(zona_nome, status, epis_faltando, pose_info, funcionario
             print("[webhook] ocorrência não retornou id_ocorrencia; alerta não enviado")
         return
 
-    motivos = []
+    motivos: list[str] = []
     if epis_faltando:
         motivos.append("EPI(s) faltando: " + ", ".join(epis_faltando))
     if pose_info and pose_info.get("postura_ok") is False:
@@ -133,7 +136,7 @@ def _notify_zone_status(zona_nome, status, epis_faltando, pose_info, funcionario
 
     alerta_payload = {
         "mensagem": " | ".join(motivos),
-        "status": ALERTA_STATUS,
+        "status": "ALTA",
         "data_hora": data_hora,
         "ocorrencia": {"id_ocorrencia": id_ocorrencia},
     }
@@ -141,22 +144,15 @@ def _notify_zone_status(zona_nome, status, epis_faltando, pose_info, funcionario
 
 
 def notify_zone_status_async(
-    zona_nome,
-    status,
-    epis_faltando=None,
-    pose_info=None,
-    funcionario=None,
-):
-    """Envia sem bloquear o loop de vídeo."""
+    zona_nome: str,
+    status: str,
+    epis_faltando: list[str] | None = None,
+    pose_info: dict[str, Any] | None = None,
+    funcionario: dict[str, Any] | None = None,
+) -> None:
     thread = threading.Thread(
         target=_notify_zone_status,
-        args=(
-            zona_nome,
-            status,
-            epis_faltando or [],
-            pose_info or {},
-            funcionario,
-        ),
+        args=(zona_nome, status, epis_faltando or [], pose_info or {}, funcionario),
         daemon=True,
     )
     thread.start()

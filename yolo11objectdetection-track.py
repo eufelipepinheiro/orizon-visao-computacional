@@ -1,4 +1,5 @@
-python yolo11objectdetection-track.py camera_1.jsonimport sys
+import os
+import sys
 import json
 import cv2
 import numpy as np
@@ -6,13 +7,14 @@ from ultralytics import YOLO
 import cvzone
 from pose_check import process_pose, check_sustained_posture
 import webhook_client
-from webhook_client import notify_zone_status_async, BASE_URL
+from webhook_client import notify_zone_status_async
 from zone_loader import load_zones_from_api
+from camera_source import ReconnectingVideoCapture, resolve_camera_source, safe_source_name
 import face_id
 from esp32_led import Esp32Led
 
 # =========================
-# CONFIG DA CÂMERA (por comodo/sala)
+# CONFIG DA CÃ‚MERA (por comodo/sala)
 # =========================
 # Uso: python yolo11objectdetection-track.py config/camera_1.json
 if len(sys.argv) < 2:
@@ -22,49 +24,81 @@ if len(sys.argv) < 2:
 
 CONFIG_PATH = sys.argv[1]
 
-with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+with open(CONFIG_PATH, "r", encoding="utf-8-sig") as f:
     config = json.load(f)
 
 COMODO = config["comodo"]
-CAMERA_SOURCE = config["camera_source"]
+CAMERA_ID = config.get("camera_id", COMODO)
+CAMERA_SOURCE = resolve_camera_source(config)
 ESP32_PORT = config.get("esp32_port", "COM6")
 ESP32_HABILITADO = config.get("esp32_habilitado", True)
 
-# Opcional no config (se não existir, assume False -- não quebra
-# configs antigos que ainda não têm esse campo). Se True, a zona só
-# fica OK se o funcionário for reconhecido, além de EPI e postura.
+# Opcional no config (se nÃ£o existir, assume False -- nÃ£o quebra
+# configs antigos que ainda nÃ£o tÃªm esse campo). Se True, a zona sÃ³
+# fica OK se o funcionÃ¡rio for reconhecido, alÃ©m de EPI e postura.
 EXIGE_RECONHECIMENTO_FACIAL = config.get("exige_reconhecimento_facial", False)
 
+backend_url = config.get("backend_url")
+backend_url_env = config.get("backend_url_env")
+if backend_url_env:
+    backend_url = os.getenv(backend_url_env)
+    if not backend_url:
+        raise RuntimeError(
+            f"A variável de ambiente '{backend_url_env}' não foi definida."
+        )
+
+webhook_client.configure(
+    base_url=backend_url,
+    camera_id=CAMERA_ID,
+    funcionario_padrao_id=config.get("funcionario_padrao_id"),
+    incluir_camera_payload=config.get("incluir_camera_payload", False),
+)
+BASE_URL = webhook_client.BASE_URL
+
 print(f"=== Iniciando monitoramento: {COMODO} (config: {CONFIG_PATH}) ===")
+print(f"Câmera: {CAMERA_ID} | fonte: {safe_source_name(CAMERA_SOURCE)}")
 
 # Monta o mapa zona -> id_zona (backend mudou: Ocorrencia agora
-# referencia Zona, não mais Maquina diretamente) e sobrescreve o mapa
-# global usado pelo webhook_client (usado tanto pra enviar ocorrências
+# referencia Zona, nÃ£o mais Maquina diretamente) e sobrescreve o mapa
+# global usado pelo webhook_client (usado tanto pra enviar ocorrÃªncias
 # quanto pra buscar zonas da API).
 webhook_client.ZONA_ID_MAP = {
     nome: dados.get("id_zona") for nome, dados in config["zonas"].items()
 }
-webhook_client.DEFAULT_FUNCIONARIO_ID = config.get("funcionario_padrao_id")
-
 if webhook_client.DEFAULT_FUNCIONARIO_ID is None:
-    print("[webhook] AVISO: funcionario_padrao_id não configurado; ocorrências sem reconhecimento não serão enviadas")
+    print("[webhook] AVISO: funcionario_padrao_id nÃ£o configurado; ocorrÃªncias sem reconhecimento nÃ£o serÃ£o enviadas")
 
 # =========================
 # MODELO
 # =========================
-model = YOLO("best.pt")
+model = YOLO(config.get("model_path", "best.pt"))
 names = model.model.names
 
 # =========================
-# CAMERA - DETECTAR RESOLUÇÃO
+# CAMERA - DETECTAR RESOLUÃ‡ÃƒO
 # =========================
-cap = cv2.VideoCapture(CAMERA_SOURCE)
+cap = ReconnectingVideoCapture(
+    CAMERA_SOURCE,
+    reconnect_seconds=config.get("reconnect_seconds", 2),
+    reconnect_attempts=config.get("reconnect_attempts", 0),
+)
 
-# Pegar resolução real da câmera
+if not cap.is_opened():
+    print(f"[camera] não foi possível abrir a fonte: {safe_source_name(CAMERA_SOURCE)}")
+    sys.exit(2)
+
+# Pegar resoluÃ§Ã£o real da cÃ¢mera
 camera_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 camera_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-print(f"Câmera resolução detectada: {camera_width}x{camera_height}")
+if camera_width <= 0 or camera_height <= 0:
+    ok, first_frame = cap.read()
+    if not ok:
+        print("[camera] não foi possível obter o primeiro quadro")
+        sys.exit(2)
+    camera_height, camera_width = first_frame.shape[:2]
+
+print(f"CÃ¢mera resoluÃ§Ã£o detectada: {camera_width}x{camera_height}")
 
 # =========================
 # ZONAS - COM AUTO-SCALING
@@ -75,14 +109,14 @@ def scale_zone(zone_points, sx, sy):
         [int(x * sx), int(y * sy)] for x, y in zone_points
     ], np.int32)
 
-# Resolução de referência do config -- usada tanto pro fallback local
-# quanto como default caso a API não informe a dela própria.
+# ResoluÃ§Ã£o de referÃªncia do config -- usada tanto pro fallback local
+# quanto como default caso a API nÃ£o informe a dela prÃ³pria.
 ref = config["resolucao_referencia"]
 scale_x = camera_width / ref["largura"]
 scale_y = camera_height / ref["altura"]
 
-# Fallback local: pontos que já vêm no arquivo de config deste comodo.
-# Usado só se a API não responder ou a zona ainda não tiver sido
+# Fallback local: pontos que jÃ¡ vÃªm no arquivo de config deste comodo.
+# Usado sÃ³ se a API nÃ£o responder ou a zona ainda nÃ£o tiver sido
 # calibrada pelo site.
 FALLBACK_ZONAS = {}
 for nome, dados in config["zonas"].items():
@@ -92,25 +126,33 @@ for nome, dados in config["zonas"].items():
     }
 
 # Tenta buscar as zonas calibradas via site (API). Zonas sem id_zona
-# no config, ou que a API não retornar, caem pro fallback acima.
-ZONAS = load_zones_from_api(
-    camera_width=camera_width,
-    camera_height=camera_height,
-    zona_id_map=webhook_client.ZONA_ID_MAP,
-    api_url=BASE_URL,
-    fallback=FALLBACK_ZONAS,
+# no config, ou que a API nÃ£o retornar, caem pro fallback acima.
+carregar_zonas_backend = config.get(
+    "carregar_zonas_backend", "webhook.site" not in BASE_URL
 )
+if carregar_zonas_backend:
+    ZONAS = load_zones_from_api(
+        camera_width=camera_width,
+        camera_height=camera_height,
+        zona_id_map=webhook_client.ZONA_ID_MAP,
+        api_url=BASE_URL,
+        fallback=FALLBACK_ZONAS,
+    )
+else:
+    print("[zone_loader] usando zonas locais configuradas para esta câmera")
+    ZONAS = FALLBACK_ZONAS
 
 for nome, zona in ZONAS.items():
     print(f"{nome} pontos escalados: {zona['polygon'].tolist()}")
 
 # =========================
-# RECONHECIMENTO FACIAL (uma vez por sessão de presença)
+# RECONHECIMENTO FACIAL (uma vez por sessÃ£o de presenÃ§a)
 # =========================
-face_id.load_known_faces(BASE_URL)
+if EXIGE_RECONHECIMENTO_FACIAL and "webhook.site" not in BASE_URL:
+    face_id.load_known_faces(BASE_URL)
 
 # =========================
-# FUNÇÃO: zona
+# FUNÃ‡ÃƒO: zona
 # =========================
 def get_zona(cx, cy):
     for nome, zona in ZONAS.items():
@@ -125,8 +167,8 @@ def get_zona(cx, cy):
 # =========================
 count = 0
 
-# Guarda o último status enviado ao webhook por zona, para só disparar
-# uma requisição quando o status realmente mudar (OK <-> BLOQUEADA)
+# Guarda o Ãºltimo status enviado ao webhook por zona, para sÃ³ disparar
+# uma requisiÃ§Ã£o quando o status realmente mudar (OK <-> BLOQUEADA)
 last_status_sent = {nome: None for nome in ZONAS.keys()}
 
 cv2.namedWindow(f"RGB - {COMODO}", cv2.WINDOW_NORMAL)
@@ -135,16 +177,16 @@ cv2.resizeWindow(f"RGB - {COMODO}", 1280, 720)
 # =========================
 # HUD CONFIG (IMPORTANTE)
 # =========================
-# Proporcional à resolução da câmera -- os valores fixos antigos (2.2,
-# 3, 60, 120) foram calibrados pra uma câmera de 2560x2048. Numa
-# câmera menor (ex: 640x480) isso ficava gigante e cortava o texto.
+# Proporcional Ã  resoluÃ§Ã£o da cÃ¢mera -- os valores fixos antigos (2.2,
+# 3, 60, 120) foram calibrados pra uma cÃ¢mera de 2560x2048. Numa
+# cÃ¢mera menor (ex: 640x480) isso ficava gigante e cortava o texto.
 _hud_scale = camera_width / 1280.0
 FONT_SCALE = max(0.6, round(2.2 * _hud_scale, 2))
 THICKNESS = max(1, round(3 * _hud_scale))
 SPACING = max(22, round(60 * _hud_scale))
 Y_BASE = max(30, round(120 * _hud_scale))
 
-# A porta serial é aberta uma vez. O ESP32 começa bloqueado por segurança.
+# A porta serial Ã© aberta uma vez. O ESP32 comeÃ§a bloqueado por seguranÃ§a.
 esp32 = Esp32Led(porta=ESP32_PORT, habilitado=ESP32_HABILITADO)
 
 while True:
@@ -162,12 +204,12 @@ while True:
     frame_original = frame.copy()  # sem desenhos -- usado no reconhecimento facial
     has_human, is_live, posture_ok, pose_status, frame = process_pose(frame)
 
-    # True só se a postura estiver ruim de forma sustentada (não é um
-    # movimento rápido e normal do trabalho, tipo abaixar pra pegar algo)
+    # True sÃ³ se a postura estiver ruim de forma sustentada (nÃ£o Ã© um
+    # movimento rÃ¡pido e normal do trabalho, tipo abaixar pra pegar algo)
     postura_bloqueio = check_sustained_posture(posture_ok)
 
-    # Só roda reconhecimento facial de verdade na primeira vez que
-    # alguém entra em cena; enquanto continuar em cena, reaproveita.
+    # SÃ³ roda reconhecimento facial de verdade na primeira vez que
+    # alguÃ©m entra em cena; enquanto continuar em cena, reaproveita.
     funcionario_atual = face_id.get_current_identity(frame_original, has_human)
 
     # =========================
@@ -284,7 +326,7 @@ while True:
             msg += " | funcionario nao identificado"
 
         # =========================
-        # WEBHOOK: só envia se o status mudou
+        # WEBHOOK: sÃ³ envia se o status mudou
         # =========================
         if status != last_status_sent[nome]:
             last_status_sent[nome] = status
@@ -325,3 +367,4 @@ while True:
 esp32.fechar()
 cap.release()
 cv2.destroyAllWindows()
+

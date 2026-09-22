@@ -42,10 +42,10 @@ import requests
 
 # URL padrÃ£o do tÃºnel informado pelo backend. O script principal pode
 # sobrescrever este valor atravÃ©s de "backend_url" no JSON da cÃ¢mera.
-BASE_URL = "https://webhook.site/719f4ecf-564f-44b5-bf90-441e86611495"
+#BASE_URL = "https://webhook.site/9652c05a-96ea-4970-a155-0cf991c94ca5"
 
 # --- MODO PRODUÃ‡ÃƒO (quando o backend estiver no ar, troque para isso) ---
-# BASE_URL = "http://IP_DO_SERVIDOR:8080"
+BASE_URL = "https://unideographical-nonnocturnally-jarred.ngrok-free.dev"
 
 # Preenchido em runtime pelo script principal, a partir do config da
 # cÃ¢mera (ex: config/camera_1.json). Chave = nome da zona no seu

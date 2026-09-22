@@ -493,14 +493,15 @@ pre#jsonOut {
       <canvas id="canvas" style="display:none"></canvas>
     </div>
 
-    <div class="save-form" id="saveForm" style="display:none">
+    <div class="save-form" id="saveForm">
+      <p>Preencha os dados da zona, marque os pontos e clique em Fechar polígono. As coordenadas serão adicionadas ao JSON.</p>
       <div class="field">
         <label>Nome da zona (usado no script Python)</label>
-        <input type="text" id="zoneName" placeholder="ex: MAQUINA_A">
+        <input type="text" id="zoneName" value="MAQUINA_1" placeholder="ex: MAQUINA_A">
       </div>
       <div class="field">
-        <label>ID da máquina no backend</label>
-        <input type="text" id="zoneMachineId" placeholder="ex: 1">
+        <label>ID da zona existente no backend</label>
+        <input type="number" min="1" step="1" id="zoneMachineId" placeholder="Informe o ID da zona">
       </div>
       <div class="field">
         <label>EPIs obrigatórios (separados por vírgula)</label>
@@ -508,7 +509,7 @@ pre#jsonOut {
       </div>
       <div class="row2">
         <button class="btn btn-primary" id="btnSaveZone">Salvar zona</button>
-        <button class="btn" id="btnCancelZone">Cancelar</button>
+        <button class="btn" id="btnCancelZone">Descartar pontos</button>
       </div>
     </div>
   </div>
@@ -516,10 +517,11 @@ pre#jsonOut {
   <div class="side">
     <div class="side-section">
       <div class="section-title"><h2>Configuração</h2><small>01</small></div>
-      <div class="field">
-        <label>URL da API</label>
-        <input type="text" id="apiUrlInput" placeholder="https://webhook.site/seu-id" value="">
-      </div>
+      <div class="field"><label>ID da câmera</label><input id="cameraId" type="number" min="1" step="1" value="9"></div>
+      <div class="field"><label>Cômodo</label><input id="roomName" value="Oficina A"></div>
+      <div class="field"><label>Funcionário padrão (ID existente no banco)</label><input id="employeeId" type="number" min="1" step="1" value="1"></div>
+      <p>Para a SICK, informe câmera 13. O launcher buscará o RTSP na API. ESP32 desativado neste JSON.</p>
+      <p>Salve o JSON na pasta config/cameras do projeto. As zonas são configuradas localmente.</p>
     </div>
 
     <div class="side-section">
@@ -529,7 +531,7 @@ pre#jsonOut {
     </div>
 
     <div class="side-section">
-      <div class="section-title"><h2>Saída para o backend</h2><small>03</small></div>
+      <div class="section-title"><h2>JSON da câmera para o Python</h2><small>03</small></div>
       <pre id="jsonOut">{}</pre>
       <div class="row2" style="display:flex; gap:8px; margin-top:8px;">
         <button class="btn" id="btnCopy">Copiar</button>
@@ -566,6 +568,9 @@ document.getElementById('btnUpload').onclick = () => fileInput.click();
 fileInput.onchange = (e) => {
   const file = e.target.files[0];
   if (!file) return;
+  if ((zones.length || currentPoints.length) && !confirm('Trocar a foto apagará as zonas atuais. Já baixou o JSON?')) {
+    fileInput.value = ''; return;
+  }
   const reader = new FileReader();
   reader.onload = (ev) => {
     img = new Image();
@@ -581,6 +586,10 @@ fileInput.onchange = (e) => {
       emptyState.style.display = 'none';
       canvas.style.display = 'block';
       currentPoints = [];
+      zones = [];
+      updateToolbarState();
+      renderZoneList();
+      renderJson();
       redraw();
     };
     img.src = ev.target.result;
@@ -606,30 +615,40 @@ btnUndo.onclick = () => {
 
 btnClose.onclick = () => {
   if (currentPoints.length < 3) return;
-  saveForm.style.display = 'flex';
-  document.getElementById('zoneName').value = `MAQUINA_${zones.length + 1}`;
-  document.getElementById('zoneName').focus();
+  document.getElementById('btnSaveZone').onclick();
 };
 
 document.getElementById('btnCancelZone').onclick = () => {
-  saveForm.style.display = 'none';
+  currentPoints = [];
+  updateToolbarState();
+  redraw();
 };
 
 document.getElementById('btnSaveZone').onclick = () => {
+  if (currentPoints.length < 3) { alert('Marque pelo menos 3 pontos na imagem.'); return; }
   const nome = document.getElementById('zoneName').value.trim() || `ZONA_${zones.length + 1}`;
-  const idMaquina = document.getElementById('zoneMachineId').value.trim();
+  const idZona = Number(document.getElementById('zoneMachineId').value);
+  if (!Number.isSafeInteger(idZona) || idZona < 1) {
+    alert('Informe o ID da zona existente no backend. Seus pontos foram mantidos.');
+    document.getElementById('zoneMachineId').scrollIntoView({block: 'center'});
+    document.getElementById('zoneMachineId').focus();
+    return;
+  }
+  if (zones.some(z => z.nome === nome || z.id_zona === idZona)) {
+    alert('Já existe uma zona com esse nome ou ID. Informe outro ou remova a anterior.'); return;
+  }
   const episRaw = document.getElementById('zoneEpis').value.trim();
   const epis = episRaw ? episRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
 
   // Converte pontos de coordenada de tela para coordenada original da imagem
   const pontosOriginais = currentPoints.map(([x, y]) => [
-    Math.round(x / displayScale),
-    Math.round(y / displayScale)
+    Math.max(0, Math.min(naturalW - 1, Math.round(x * naturalW / canvas.width))),
+    Math.max(0, Math.min(naturalH - 1, Math.round(y * naturalH / canvas.height)))
   ]);
 
   zones.push({
     nome,
-    id_maquina: idMaquina || null,
+    id_zona: idZona,
     pontos: pontosOriginais,
     epis_obrigatorios: epis,
     color: COLORS[zones.length % COLORS.length],
@@ -637,7 +656,10 @@ document.getElementById('btnSaveZone').onclick = () => {
   });
 
   currentPoints = [];
-  saveForm.style.display = 'none';
+  let nextName = zones.length + 1;
+  while (zones.some(z => z.nome === `MAQUINA_${nextName}`)) nextName++;
+  document.getElementById('zoneName').value = `MAQUINA_${nextName}`;
+  document.getElementById('zoneMachineId').value = '';
   updateToolbarState();
   renderZoneList();
   renderJson();
@@ -693,6 +715,9 @@ function drawPolygon(pts, color, closed, label) {
   }
 }
 
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
+}
 function renderZoneList() {
   zoneList.innerHTML = '';
   const zoneCounter = document.getElementById('zoneCounter');
@@ -703,13 +728,13 @@ function renderZoneList() {
     card.className = 'zone-card';
     card.innerHTML = `
       <div class="row">
-        <span class="name"><span class="swatch" style="background:${z.color}"></span>${z.nome}</span>
+        <span class="name"><span class="swatch" style="background:${z.color}"></span>${escapeHtml(z.nome)}</span>
         <button class="remove" title="remover">×</button>
       </div>
-      <div class="meta">${z.pontos.length} pontos · ref ${naturalW}×${naturalH}px · id_maquina: ${z.id_maquina ?? '—'}</div>
-      <div class="epis">${z.epis_obrigatorios.length ? 'EPIs: ' + z.epis_obrigatorios.join(', ') : 'Sem EPI obrigatório definido'}</div>
+      <div class="meta">${z.pontos.length} pontos · ref ${naturalW}×${naturalH}px · id_zona: ${z.id_zona}</div>
+      <div class="epis">${z.epis_obrigatorios.length ? 'EPIs: ' + escapeHtml(z.epis_obrigatorios.join(', ')) : 'Sem EPI obrigatório definido'}</div>
       <div class="row2" style="margin-top:4px;">
-        <button class="btn send-zone" style="flex:1;">Enviar pro backend</button>
+        <button class="btn send-zone" style="flex:1;" disabled title="Use o JSON local no monitor">Zona salva no JSON local</button>
       </div>
       <div class="send-status" style="font-size:11px; font-family: var(--mono);"></div>
     `;
@@ -719,81 +744,59 @@ function renderZoneList() {
       renderJson();
       redraw();
     };
-    card.querySelector('.send-zone').onclick = () => sendZoneToBackend(i, card.querySelector('.send-status'));
     zoneList.appendChild(card);
   });
 }
 
-async function sendZoneToBackend(index, statusEl) {
-  const z = zones[index];
-  const apiUrl = document.getElementById('apiUrlInput').value.trim();
-
-  if (!apiUrl) {
-    statusEl.textContent = 'Preencha a URL da API acima primeiro.';
-    statusEl.style.color = 'var(--red)';
-    return;
-  }
-  if (!z.id_maquina) {
-    statusEl.textContent = 'Essa zona não tem id_maquina definido.';
-    statusEl.style.color = 'var(--red)';
-    return;
-  }
-
-  const payload = {
-    resolucao_referencia: { largura: naturalW, altura: naturalH },
-    polygon: z.pontos,
-    epis_obrigatorios: z.epis_obrigatorios
-  };
-
-  statusEl.textContent = 'Enviando...';
-  statusEl.style.color = 'var(--text-dim)';
-
-  try {
-    const resp = await fetch(`${apiUrl.replace(/\/$/, '')}/maquina/${z.id_maquina}/zona`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    if (resp.ok) {
-      statusEl.textContent = `Enviado (status ${resp.status})`;
-      statusEl.style.color = 'var(--teal)';
-    } else {
-      statusEl.textContent = `Backend respondeu com erro (status ${resp.status})`;
-      statusEl.style.color = 'var(--red)';
-    }
-  } catch (err) {
-    statusEl.textContent = `Falha de conexão: ${err.message}`;
-    statusEl.style.color = 'var(--red)';
-  }
-}
-
 function renderJson() {
   const payload = {
+    camera_id: Number(document.getElementById('cameraId').value),
+    comodo: document.getElementById('roomName').value.trim() || 'Oficina A',
+    camera_source: 0,
+    carregar_zonas_backend: false,
     resolucao_referencia: { largura: naturalW, altura: naturalH },
-    zonas: zones.map(z => ({
-      nome: z.nome,
-      id_maquina: z.id_maquina,
-      polygon: z.pontos,
+    zonas: Object.fromEntries(zones.map(z => [z.nome, {
+      id_zona: z.id_zona,
+      polygon_fallback: z.pontos,
       epis_obrigatorios: z.epis_obrigatorios
-    }))
+    }])),
+    funcionario_padrao_id: Number(document.getElementById('employeeId').value),
+    esp32_habilitado: false,
+    esp32_port: 'COM6'
   };
   jsonOut.textContent = JSON.stringify(payload, null, 2);
 }
 
-document.getElementById('btnCopy').onclick = () => {
-  navigator.clipboard.writeText(jsonOut.textContent);
+function canExport() {
+  if (currentPoints.length) { alert('Feche o polígono ou descarte os pontos antes de exportar.'); return false; }
+  if (!zones.length) { alert('Salve pelo menos uma zona antes de exportar.'); return false; }
+  for (const id of ['cameraId', 'employeeId']) {
+    const value = Number(document.getElementById(id).value);
+    if (!Number.isSafeInteger(value) || value < 1) { alert('Informe IDs positivos para câmera e funcionário.'); return false; }
+  }
+  renderJson();
+  return true;
+}
+document.getElementById('btnCopy').onclick = async () => {
+  if (!canExport()) return;
+  try { await navigator.clipboard.writeText(jsonOut.textContent); }
+  catch (_) { alert('Não foi possível copiar automaticamente. Use Baixar .json.'); }
 };
 
 document.getElementById('btnDownload').onclick = () => {
+  if (!canExport()) return;
   const blob = new Blob([jsonOut.textContent], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'zonas_calibradas.json';
+  a.download = `camera_${Number(document.getElementById('cameraId').value)}.json`;
   a.click();
   URL.revokeObjectURL(url);
 };
 
+for (const id of ['cameraId', 'roomName', 'employeeId']) {
+  document.getElementById(id).addEventListener('input', renderJson);
+}
 renderJson();
 </script>
 

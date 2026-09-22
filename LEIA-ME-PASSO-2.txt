@@ -1,0 +1,26 @@
+PASSO 2 — EXECUTAR CÂMERAS 9 E 13
+
+Copie para a raiz do projeto:
+
+- executar_multiplas_cameras.py
+- camera_api.py
+- a pasta config\cameras com camera_9.json e camera_13.json
+
+A versão recuperada dentro de orizon_teste_real\teste_real_orizon não será
+substituída.
+
+Primeiro teste somente a câmera 9:
+
+python .\executar_multiplas_cameras.py --executar-api --camera-id 9
+
+Depois encerre com q e teste somente a câmera 13:
+
+python .\executar_multiplas_cameras.py --executar-api --camera-id 13
+
+Somente depois das duas funcionarem separadamente, execute ambas:
+
+python .\executar_multiplas_cameras.py --executar-api --camera-id 9 --camera-id 13
+
+O launcher busca o RTSP em GET /api/cameras e usa as zonas de
+config\cameras\camera_ID.json. A URL completa existe apenas em um arquivo
+temporário apagado ao encerrar.

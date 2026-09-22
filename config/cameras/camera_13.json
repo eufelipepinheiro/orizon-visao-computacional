@@ -1,0 +1,40 @@
+{
+  "camera_id": 13,
+  "comodo": "SICK Visionary-B Two",
+  "camera_source": 0,
+  "carregar_zonas_backend": false,
+  "zonas": {
+    "MAQUINA_1": {
+      "id_zona": 1,
+      "epis_obrigatorios": [
+        "epi_capacete"
+      ],
+      "polygon_fallback": [
+        [48, 67],
+        [46, 460],
+        [328, 478],
+        [333, 76]
+      ]
+    },
+    "MAQUINA_2": {
+      "id_zona": 2,
+      "epis_obrigatorios": [
+        "epi_capacete",
+        "epi_oculos"
+      ],
+      "polygon_fallback": [
+        [505, 80],
+        [475, 523],
+        [920, 523],
+        [952, 57]
+      ]
+    }
+  },
+  "resolucao_referencia": {
+    "largura": 1024,
+    "altura": 576
+  },
+  "funcionario_padrao_id": 1,
+  "esp32_habilitado": false,
+  "esp32_port": "COM6"
+}
