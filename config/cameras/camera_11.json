@@ -9,7 +9,7 @@
   },
   "zonas": {
     "MAQUINA_3": {
-      "id_zona": 3,
+      "id_zona": 14,
       "polygon_fallback": [
         [
           792,
@@ -33,7 +33,7 @@
       ]
     },
     "MAQUINA_2": {
-      "id_zona": 2,
+      "id_zona": 15,
       "polygon_fallback": [
         [
           823,

@@ -47,7 +47,7 @@ def _headers() -> dict[str, str]:
     return headers
 
 
-def _post(path: str, payload: dict[str, Any]):
+def _post(path: str, payload: dict[str, Any]) -> dict[str, Any] | None:
     url = f"{BASE_URL.rstrip('/')}{path}"
     try:
         response = requests.post(
@@ -75,8 +75,10 @@ def _post(path: str, payload: dict[str, Any]):
 
 
 def _funcionario_id(funcionario: dict[str, Any] | None) -> int | None:
-    if funcionario and funcionario.get("id_funcionario"):
-        return int(funcionario["id_funcionario"])
+    if funcionario:
+        fid = funcionario.get("id_funcionario") or funcionario.get("id")
+        if fid is not None:
+            return int(fid)
     return DEFAULT_FUNCIONARIO_ID
 
 
@@ -100,6 +102,8 @@ def _notify_zone_status(
         return
 
     data_hora = time.strftime("%Y-%m-%dT%H:%M:%S")
+
+    # Contrato oficial para a Ocorrencia no Backend
     ocorrencia_payload: dict[str, Any] = {
         "data_hora": data_hora,
         "status": status,
@@ -111,6 +115,7 @@ def _notify_zone_status(
 
     resultado = _post("/api/ocorrencia", ocorrencia_payload)
 
+    # Alerta é enviado somente para zonas bloqueadas
     if status != "BLOQUEADA":
         return
 

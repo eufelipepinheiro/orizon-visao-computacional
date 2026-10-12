@@ -5,7 +5,7 @@
   "carregar_zonas_backend": false,
   "zonas": {
     "MAQUINA_1": {
-      "id_zona": 1,
+      "id_zona": 16,
       "epis_obrigatorios": [
         "epi_capacete"
       ],
@@ -17,7 +17,7 @@
       ]
     },
     "MAQUINA_2": {
-      "id_zona": 2,
+      "id_zona": 17,
       "epis_obrigatorios": [
         "epi_capacete",
         "epi_oculos"

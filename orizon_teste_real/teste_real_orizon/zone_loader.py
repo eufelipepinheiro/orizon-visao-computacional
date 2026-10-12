@@ -2,39 +2,7 @@
 zone_loader.py
 
 Busca a calibração de cada zona (polígono + EPIs obrigatórios) direto do
-backend, em vez de manter os pontos hardcoded no script principal.
-
-Como funciona:
-    Pra cada zona (ex: "MAQUINA_1"), sabemos o id_zona correspondente
-    no banco (vem de ZONA_ID_MAP, em webhook_client.py -- é o mesmo
-    mapa usado pra enviar as ocorrências, então fica uma fonte única de
-    verdade). Fazemos GET /api/zona/{id} pra cada uma.
-
-    O backend (model Zona.java) devolve algo como:
-        {
-          "id_zona": 3,
-          "nome": "MAQUINA_1",
-          "poligonos": [214, 21, 209, 464, 528, 453, 499, 29],
-          "maquina": {"id_maquina": 1, ...},
-          "epi": [
-            {"id": 1, "epi": {"id_epi": 2, "nome": "epi_capacete", ...}}
-          ]
-        }
-
-    Duas particularidades importantes desse formato (diferente do que
-    a gente supunha antes de ver o código real do backend):
-      1. "poligonos" é uma lista ACHATADA de números (x1,y1,x2,y2,...),
-         não uma lista de pares [x,y]. Precisa desmembrar em pares.
-      2. Não existe campo de resolução de referência na Zona -- então
-         não dá pra saber com certeza em que resolução os pontos foram
-         calibrados. Por enquanto, se a API não informar isso, ASSUME
-         que os pontos já estão na resolução nativa da câmera atual
-         (sem escala). Se isso causar zonas mal posicionadas, é sinal
-         de que esse campo precisa ser adicionado no backend.
-
-Se a API falhar (backend fora do ar, zona ainda não calibrada, id
-faltando no ZONA_ID_MAP), cai pro fallback local -- os pontos que já
-estão no config da câmera -- pra não travar a operação.
+backend por ID da câmera e converte para as classes treinadas no modelo YOLO (Roboflow).
 """
 
 import requests
@@ -43,80 +11,134 @@ import numpy as np
 REQUEST_TIMEOUT = 5
 VERBOSE = True
 
+# ==============================================================================
+# TABELA DE TRADUÇÃO (DE: Backend Jhonatan -> PARA: Suas Classes YOLO Roboflow)
+# ==============================================================================
+EPI_MAP = {
+    # Mapeamento por ID do Backend (Recomendado)
+    2: "epi_oculos",                    # id_epi 2 -> Óculos de Proteção
+    9: "epi_capacete",                  # id_epi 9 -> EPI capacete
+    11: "colete",                       # id_epi 11 -> Colete
+    3: "epi_protetor_auricular",        # id_epi 3 -> Protetor Auricular (Sugestão Roboflow)
+    12: "epi_luva",                     # id_epi 12 -> EPI luva (Sugestão Roboflow)
 
-def _unflatten_polygon(poligonos_achatados):
-    """[x1,y1,x2,y2,...] -> [[x1,y1],[x2,y2],...]"""
-    pares = list(zip(poligonos_achatados[0::2], poligonos_achatados[1::2]))
-    return pares
+    # Mapeamento por Nome do Backend (Fallback de Segurança)
+    "Óculos de Proteção": "epi_oculos",
+    "EPI capacete": "epi_capacete",
+    "Colete": "colete",
+    "Protetor Auricular": "epi_protetor_auricular",
+    "EPI luva": "epi_luva",
+}
 
 
-def load_zones_from_api(camera_width, camera_height, zona_id_map, api_url, fallback=None):
+def parse_poligonos(poligonos_data):
     """
-    Retorna um dicionário no mesmo formato que o script principal já usa:
-        {
-          "MAQUINA_1": {"polygon": np.array(...), "epis_obrigatorios": {...}},
-          ...
-        }
-
-    camera_width / camera_height: resolução real da câmera (pra escalar
-        os pontos, quando a API informar a resolução de referência).
-    zona_id_map: dict {nome_da_zona: id_zona ou None}
-    api_url: raiz da API (ex: "https://webhook.site/xxx" em teste, ou
-        "http://IP:8080" em produção).
-    fallback: dict opcional com o mesmo formato de retorno, usado quando
-        a API não responde ou a zona ainda não tem id_zona definido.
+    Suporta tanto a estrutura nova da API [{'x': 627, 'y': 365}]
+    quanto a antiga achatada [x1, y1, x2, y2].
     """
+    if not poligonos_data:
+        return []
+    
+    if isinstance(poligonos_data[0], dict):
+        return [[pt["x"], pt["y"]] for pt in poligonos_data if "x" in pt and "y" in pt]
+    
+    return list(zip(poligonos_data[0::2], poligonos_data[1::2]))
+
+
+def load_zones_from_api(camera_width, camera_height, zona_id_map, api_url, fallback=None, camera_id=None):
     fallback = fallback or {}
     zonas = {}
 
-    for zona_nome, id_zona in zona_id_map.items():
-        if id_zona is None:
+    if camera_id is None:
+        camera_id = 9 
+        if VERBOSE:
+            print(f"[zone_loader] AVISO: camera_id não informado. Assumindo: {camera_id}")
+
+    api_data_list = []
+    if camera_id is not None:
+        url = f"{api_url.rstrip('/')}/api/zona/camera/{camera_id}"
+        try:
             if VERBOSE:
-                print(f"[zone_loader] '{zona_nome}' sem id_zona -- usando fallback local")
+                print(f"[zone_loader] Buscando zonas na API: {url}")
+            resp = requests.get(url, timeout=REQUEST_TIMEOUT)
+            resp.raise_for_status()
+            api_data_list = resp.json()
+        except (requests.exceptions.RequestException, ValueError, TypeError) as e:
+            if VERBOSE:
+                print(f"[zone_loader] falha ao buscar zonas da câmera {camera_id} via API: {e}")
+
+    if isinstance(api_data_list, dict):
+        api_data_list = [api_data_list]
+
+    # Mapeamento flexível por nome ou por índice de ordem
+    api_zones_dict = {}
+    for data in api_data_list:
+        if isinstance(data, dict):
+            nome_zona = data.get("nome")
+            if nome_zona:
+                api_zones_dict[nome_zona] = data
+
+    # Se a API retornou zonas mas os nomes não batem com o JSON local, mapeamos por índice (ordem)
+    lista_api_disponivel = list(api_data_list)
+
+    for index, (zona_nome, id_zona_local) in enumerate(zona_id_map.items()):
+        # Tenta achar pelo nome exato ou pega pelo índice correspondente na lista da API
+        data = api_zones_dict.get(zona_nome)
+        if not data and index < len(lista_api_disponivel):
+            data = lista_api_disponivel[index]
+            if VERBOSE:
+                print(f"[zone_loader] Mapeamento por índice: associando '{zona_nome}' aos dados da API index {index}")
+
+        if not data:
+            if VERBOSE:
+                print(f"[zone_loader] '{zona_nome}' não encontrada na API -- usando fallback local")
             if zona_nome in fallback:
                 zonas[zona_nome] = fallback[zona_nome]
             continue
 
-        url = f"{api_url.rstrip('/')}/api/zona/{id_zona}"
         try:
-            resp = requests.get(url, timeout=REQUEST_TIMEOUT)
-            resp.raise_for_status()
-            data = resp.json()
+            pontos = parse_poligonos(data.get("poligonos", []))
 
-            pontos = _unflatten_polygon(data["poligonos"])
+            ref = data.get("resolucao") or data.get("resolucao_referencia") or {}
+            ref_w = ref.get("largura", camera_width)
+            ref_h = ref.get("altura", camera_height)
 
-            # Zona.java não tem campo de resolução de referência hoje.
-            # Se algum dia for adicionado, o código já aproveita; até
-            # lá, assume que os pontos já estão na resolução da câmera.
-            ref = data.get("resolucao_referencia")
-            if ref:
-                sx = camera_width / ref["largura"]
-                sy = camera_height / ref["altura"]
-            else:
-                sx = sy = 1.0
+            sx = camera_width / ref_w if ref_w > 0 else 1.0
+            sy = camera_height / ref_h if ref_h > 0 else 1.0
 
             polygon_scaled = np.array(
                 [[int(x * sx), int(y * sy)] for x, y in pontos],
-                np.int32,
+                np.int32
             )
 
-            epis = {item["epi"]["nome"] for item in data.get("epi", []) if item.get("epi")}
+            epis_traduzidos_yolo = set()
+
+            for item in data.get("epi", []):
+                epi_info = item.get("epi", {}) if isinstance(item, dict) and "epi" in item else item
+                if isinstance(epi_info, dict):
+                    id_epi = epi_info.get("id_epi")
+                    nome_backend = epi_info.get("nome")
+
+                    if id_epi in EPI_MAP:
+                        epis_traduzidos_yolo.add(EPI_MAP[id_epi])
+                    elif nome_backend in EPI_MAP:
+                        epis_traduzidos_yolo.add(EPI_MAP[nome_backend])
+                    elif nome_backend:
+                        epis_traduzidos_yolo.add(nome_backend)
 
             zonas[zona_nome] = {
                 "polygon": polygon_scaled,
-                "epis_obrigatorios": epis,
+                "epis_obrigatorios": epis_traduzidos_yolo
             }
+            
+            id_zona_backend = data.get("id_zona")
             if VERBOSE:
-                print(f"[zone_loader] '{zona_nome}' carregada da API (id_zona={id_zona})")
+                print(f"[zone_loader] '{zona_nome}' carregada com sucesso do backend (id_zona={id_zona_backend}) | EPIs: {epis_traduzidos_yolo}")
 
-        except (requests.exceptions.RequestException, KeyError, ValueError, TypeError) as e:
+        except (KeyError, ValueError, TypeError) as e:
             if VERBOSE:
-                print(f"[zone_loader] falha ao buscar '{zona_nome}' da API: {e}")
+                print(f"[zone_loader] erro ao processar dados da zona '{zona_nome}': {e}")
             if zona_nome in fallback:
-                if VERBOSE:
-                    print(f"[zone_loader] usando fallback local pra '{zona_nome}'")
                 zonas[zona_nome] = fallback[zona_nome]
-            else:
-                print(f"[zone_loader] AVISO: '{zona_nome}' sem fallback -- zona ficará indisponível")
 
     return zonas

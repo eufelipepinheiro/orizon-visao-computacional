@@ -1,0 +1,64 @@
+{
+  "camera_id": 15,
+  "comodo": "Oficina A",
+  "camera_source": 0,
+  "carregar_zonas_backend": true,
+  "resolucao_referencia": {
+    "largura": 1920,
+    "altura": 1080
+  },
+  "zonas": {
+    "MAQUINA_1": {
+      "id_zona": 22,
+      "polygon_fallback": [
+        [
+          887,
+          1077
+        ],
+        [
+          1055,
+          6
+        ],
+        [
+          1915,
+          11
+        ],
+        [
+          1911,
+          1075
+        ]
+      ],
+      "epis_obrigatorios": [
+        "epi_capacete"
+      ]
+    },
+    "MAQUINA_2": {
+      "id_zona": 23,
+      "polygon_fallback": [
+        [
+          1049,
+          8
+        ],
+        [
+          875,
+          1077
+        ],
+        [
+          0,
+          1079
+        ],
+        [
+          535,
+          4
+        ]
+      ],
+      "epis_obrigatorios": [
+        "epi_capacete",
+        "epi_oculos"
+      ]
+    }
+  },
+  "funcionario_padrao_id": 1,
+  "esp32_habilitado": true,
+  "esp32_port": "COM6"
+}
